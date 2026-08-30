@@ -94,9 +94,9 @@ export const registerUser = async (req, res) => {
         // Send OTP email
         try {
             await sendEmail({
-                email: user.email,
+                to: user.email,
                 subject: "Email Verification OTP - AI Cold Mail Generator",
-                message: `Hello ${user.name},
+                text: `Hello ${user.name},
 
 Your OTP for email verification is:
 
