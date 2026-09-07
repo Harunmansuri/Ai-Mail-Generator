@@ -1,8 +1,11 @@
-import User from "../models/userModel.js";
+import { User } from "../models/userModel.js";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 import sendEmail from "../utils/emailService.js";
 
-// Generate JWT Token
+// ==============================
+// GENERATE JWT TOKEN
+// ==============================
 const generateToken = (id) => {
     return jwt.sign(
         { id },
@@ -13,9 +16,13 @@ const generateToken = (id) => {
     );
 };
 
-// Generate 6-digit OTP
+// ==============================
+// GENERATE 6-DIGIT OTP
+// ==============================
 const generateOTP = () => {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    return Math.floor(
+        100000 + Math.random() * 900000
+    ).toString();
 };
 
 // ==============================
@@ -25,78 +32,91 @@ export const registerUser = async (req, res) => {
     try {
         const { name, email, password } = req.body;
 
-        // Required fields validation
-        if (!name?.trim() || !email?.trim() || !password) {
+        // Input validation
+        if (!name || !email || !password) {
             return res.status(400).json({
                 success: false,
-                message: "Name, email, and password are required",
+                message:
+                    "Name, email, and password are required",
             });
         }
 
-        const normalizedName = name.trim();
-        const normalizedEmail = email.trim().toLowerCase();
-
-        // Email validation
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-        if (!emailRegex.test(normalizedEmail)) {
+        // Validate email
+        if (!email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
             return res.status(400).json({
                 success: false,
-                message: "Please provide a valid email address",
+                message:
+                    "Please provide a valid email address",
             });
         }
 
-        // Name validation
-        if (normalizedName.length < 2) {
-            return res.status(400).json({
-                success: false,
-                message: "Name must be at least 2 characters long",
-            });
-        }
-
-        // Password validation
+        // Validate password
         if (password.length < 6) {
             return res.status(400).json({
                 success: false,
-                message: "Password must be at least 6 characters long",
+                message:
+                    "Password must be at least 6 characters long",
             });
         }
 
+        // Validate name
+        if (name.trim().length < 2) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Name must be at least 2 characters long",
+            });
+        }
+
+        // Normalize email
+        const normalizedEmail =
+            email.trim().toLowerCase();
+
         // Check existing user
-        const existingUser = await User.findOne({
+        const userExists = await User.findOne({
             email: normalizedEmail,
         });
 
-        if (existingUser) {
-            return res.status(409).json({
+        if (userExists) {
+            return res.status(400).json({
                 success: false,
-                message: "Email already registered. Please login.",
+                message:
+                    "Email already registered. Please try logging in.",
             });
         }
+
+        // ==============================
+        // HASH PASSWORD
+        // ==============================
+        const salt = await bcrypt.genSalt(12);
+
+        const hashedPassword = await bcrypt.hash(
+            password,
+            salt
+        );
 
         // Generate OTP
         const otp = generateOTP();
 
+        // OTP expires in 10 minutes
         const otpExpiry = new Date(
             Date.now() + 10 * 60 * 1000
         );
 
         // Create user
         const user = await User.create({
-            name: normalizedName,
+            name: name.trim(),
             email: normalizedEmail,
-            password,
+            password: hashedPassword,
             otp,
             otpExpiry,
             isVerified: false,
         });
 
-        // Send OTP email
-        try {
-            await sendEmail({
-                to: user.email,
-                subject: "Email Verification OTP - AI Cold Mail Generator",
-                text: `Hello ${user.name},
+        // ==============================
+        // SEND OTP EMAIL
+        // ==============================
+        const message = `Hello ${user.name},
 
 Your OTP for email verification is:
 
@@ -107,11 +127,18 @@ This OTP is valid for 10 minutes.
 If you did not create this account, please ignore this email.
 
 Regards,
-AI Cold Mail Generator Team`,
+AI Cold Mail Generator Team`;
+
+        try {
+            await sendEmail({
+                to: user.email,
+                subject:
+                    "Email Verification OTP - AI Cold Mail Generator",
+                text: message,
             });
         } catch (error) {
             console.error(
-                "OTP email sending failed:",
+                "Email sending error:",
                 error.message
             );
         }
@@ -119,20 +146,20 @@ AI Cold Mail Generator Team`,
         return res.status(201).json({
             success: true,
             message:
-                "Registration successful. Please verify the OTP sent to your email.",
+                "User registered successfully. Please verify OTP sent to your email.",
             userId: user._id,
             email: user.email,
         });
     } catch (error) {
-        console.error("Registration error:", error);
+        console.error(
+            "Registration error:",
+            error
+        );
 
         return res.status(500).json({
             success: false,
             message: "Registration failed",
-            error:
-                process.env.NODE_ENV === "development"
-                    ? error.message
-                    : undefined,
+            error: error.message,
         });
     }
 };
@@ -144,105 +171,54 @@ export const verifyOTP = async (req, res) => {
     try {
         const { userId, otp } = req.body;
 
-        // Validate fields
         if (!userId || !otp) {
-            return res.status(400).json({
-                success: false,
-                message: "User ID and OTP are required",
-            });
+            return res.status(400).json({ message: 'User ID and OTP are required' });
         }
 
-        // Validate OTP
         if (!/^\d{6}$/.test(otp)) {
-            return res.status(400).json({
-                success: false,
-                message: "OTP must be a 6-digit number",
-            });
+            return res.status(400).json({ message: 'OTP must be a 6-digit number' });
         }
 
-        // Find user
         const user = await User.findById(userId);
 
         if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: "User not found",
-            });
+            return res.status(404).json({ message: 'User not found' });
         }
 
-        // Already verified
         if (user.isVerified) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Email is already verified. Please login.",
-            });
+            return res.status(400).json({ message: 'User already verified. Please login.' });
         }
 
-        // OTP doesn't exist
         if (!user.otp || !user.otpExpiry) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "No active OTP found. Please request a new OTP.",
-            });
+
+            return res.status(400).json({ message: 'No OTP found. Please register again.' });
         }
 
-        // OTP expired
         if (Date.now() > user.otpExpiry.getTime()) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "OTP has expired. Please request a new OTP.",
-            });
+            return res.status(400).json({ message: 'OTP has expired. Please register again.' });
         }
 
-        // Invalid OTP
         if (user.otp !== otp) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid OTP. Please try again.",
-            });
+            return res.status(400).json({ message: 'Invalid OTP. Please try again.' });
         }
 
-        // Verify user
         user.isVerified = true;
         user.otp = undefined;
         user.otpExpiry = undefined;
 
         await user.save();
-
-        // Generate JWT
         const token = generateToken(user._id);
 
-        // Store token in HTTP-only cookie
-        res.cookie("token", token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "strict",
-            maxAge: 30 * 24 * 60 * 60 * 1000,
-        });
-
-        return res.status(200).json({
-            success: true,
-            message: "Email verified successfully!",
-            user: {
-                _id: user._id,
-                name: user.name,
-                email: user.email,
-            },
+        res.status(200).json({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            token: token,
+            message: 'Email verified successfully!'
         });
     } catch (error) {
-        console.error("OTP verification error:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "OTP verification failed",
-            error:
-                process.env.NODE_ENV === "development"
-                    ? error.message
-                    : undefined,
-        });
+        console.error('OTP verification error:', error);
+        res.status(500).json({ message: 'Verification failed', error: error.message });
     }
 };
 
@@ -253,80 +229,83 @@ export const loginUser = async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        // Validate fields
-        if (!email?.trim() || !password) {
+        // Input validation
+        if (!email || !password) {
             return res.status(400).json({
                 success: false,
-                message: "Email and password are required",
+                message:
+                    "Email and password are required",
             });
         }
 
-        const normalizedEmail = email.trim().toLowerCase();
+        // Normalize email
+        const normalizedEmail =
+            email.trim().toLowerCase();
 
         // Find user
         const user = await User.findOne({
             email: normalizedEmail,
         });
 
-        // Don't reveal whether email exists
+        // User not found
         if (!user) {
             return res.status(401).json({
                 success: false,
-                message: "Invalid email or password",
+                message:
+                    "Invalid email or password",
             });
         }
 
         // Check email verification
         if (!user.isVerified) {
-            return res.status(403).json({
+            return res.status(401).json({
                 success: false,
                 message:
-                    "Please verify your email before logging in.",
+                    "Please verify your email first",
                 userId: user._id,
             });
         }
 
-        // Check password
+        // ==============================
+        // COMPARE PASSWORD
+        // ==============================
         const isPasswordValid =
-            await user.matchPassword(password);
+            await bcrypt.compare(
+                password,
+                user.password
+            );
 
         if (!isPasswordValid) {
             return res.status(401).json({
                 success: false,
-                message: "Invalid email or password",
+                message:
+                    "Invalid email or password",
             });
         }
 
         // Generate JWT
-        const token = generateToken(user._id);
-
-        // Store JWT in HTTP-only cookie
-        res.cookie("token", token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "strict",
-            maxAge: 30 * 24 * 60 * 60 * 1000,
-        });
+        const token = generateToken(
+            user._id
+        );
 
         return res.status(200).json({
             success: true,
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            token,
             message: "Login successful!",
-            user: {
-                _id: user._id,
-                name: user.name,
-                email: user.email,
-            },
         });
     } catch (error) {
-        console.error("Login error:", error);
+        console.error(
+            "Login error:",
+            error
+        );
 
         return res.status(500).json({
             success: false,
             message: "Login failed",
-            error:
-                process.env.NODE_ENV === "development"
-                    ? error.message
-                    : undefined,
+            error: error.message,
         });
     }
 };
@@ -336,12 +315,14 @@ export const loginUser = async (req, res) => {
 // ==============================
 export const logoutUser = async (req, res) => {
     try {
-        // Clear JWT cookie
+        // Clear authentication cookie
         res.cookie("token", "", {
             httpOnly: true,
             expires: new Date(0),
             sameSite: "strict",
-            secure: process.env.NODE_ENV === "production",
+            secure:
+                process.env.NODE_ENV ===
+                "production",
         });
 
         return res.status(200).json({
@@ -349,15 +330,15 @@ export const logoutUser = async (req, res) => {
             message: "Logout successful",
         });
     } catch (error) {
-        console.error("Logout error:", error);
+        console.error(
+            "Logout error:",
+            error
+        );
 
         return res.status(500).json({
             success: false,
             message: "Logout failed",
-            error:
-                process.env.NODE_ENV === "development"
-                    ? error.message
-                    : undefined,
+            error: error.message,
         });
     }
 };
